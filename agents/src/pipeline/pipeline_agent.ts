@@ -173,7 +173,7 @@ export interface AgentTranscriptionOptions {
 const defaultAgentTranscriptionOptions: AgentTranscriptionOptions = {
   userTranscription: true,
   agentTranscription: true,
-  agentTranscriptionSpeech: 1,
+  agentTranscriptionSpeech: 100,
   sentenceTokenizer: new BasicSentenceTokenizer(),
   wordTokenizer: new BasicWordTokenizer(false),
   hyphenateWord: hyphenateWord,
