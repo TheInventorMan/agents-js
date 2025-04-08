@@ -24,8 +24,8 @@ export interface TextSyncOptions {
 
 export const defaultTextSyncOptions: TextSyncOptions = {
   language: '',
-  speed: 1,
-  newSentenceDelay: 400,
+  speed: 100,
+  newSentenceDelay: 0,
   sentenceTokenizer: new basic.SentenceTokenizer(),
   hyphenateWord: basic.hyphenateWord,
   splitWords: basic.splitWords,
