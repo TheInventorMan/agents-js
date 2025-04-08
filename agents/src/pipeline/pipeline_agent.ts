@@ -143,6 +143,57 @@ const defaultBeforeTTSCallback: BeforeTTSCallback = (
   return text;
 };
 
+/**
+ * A custom BeforeTTSCallback that publishes the entire transcription upfront
+ * instead of relying on the TextAudioSynchronizer for incremental publishing.
+ */
+export const publishUpfrontTTSCallback: BeforeTTSCallback = (
+  agent: VoicePipelineAgent,
+  text: string | AsyncIterable<string>,
+): string | AsyncIterable<string> => {
+  if (typeof text === 'string') {
+    // For string inputs, publish the whole text immediately
+    agent.publishTranscriptionText(text);
+    return text;
+  } else {
+    // For streaming inputs, we'll collect and publish the text while still returning
+    // the original stream so TTS processing can continue normally
+    return handleStreamingText(agent, text);
+  }
+};
+
+/**
+ * Helper function to handle streaming text
+ */
+function handleStreamingText(
+  agent: VoicePipelineAgent,
+  textStream: AsyncIterable<string>,
+): AsyncIterable<string> {
+  // Create a new stream that we'll return to the caller
+  const outputStream = new AsyncIterableQueue<string>();
+  
+  // Process the input stream in a separate task
+  (async () => {
+    let fullText = '';
+    try {
+      for await (const chunk of textStream) {
+        fullText += chunk;
+        // Pass each chunk through to the output stream
+        outputStream.put(chunk);
+      }
+      // Once we have the full text, publish it
+      agent.publishTranscriptionText(fullText);
+    } catch (e) {
+      // Ensure we close the output stream if there's an error
+      outputStream.close();
+    }
+    // Close the output stream when done
+    outputStream.close();
+  })();
+
+  return outputStream;
+}
+
 export interface AgentTranscriptionOptions {
   /** Whether to forward the user transcription to the client */
   userTranscription: boolean;
@@ -315,6 +366,35 @@ export class VoicePipelineAgent extends (EventEmitter as new () => TypedEmitter<
 
   get llm(): LLM {
     return this.#llm;
+  }
+
+  /**
+   * Publishes the complete agent transcription text to the LiveKit room.
+   * This is used by the publishUpfrontTTSCallback to send the entire
+   * transcription at once instead of incrementally.
+   * 
+   * @param text The complete text to publish as transcription
+   */
+  publishTranscriptionText(text: string): void {
+    if (!this.#room?.isConnected || !this.#room.localParticipant || !this.#agentPublication?.sid) {
+      return;
+    }
+
+    this.#agentTranscribedText = text;
+    this.#room.localParticipant.publishTranscription({
+      participantIdentity: this.#room.localParticipant.identity,
+      trackSid: this.#agentPublication.sid,
+      segments: [
+        {
+          text,
+          id: randomUUID(),
+          final: true,
+          startTime: BigInt(0),
+          endTime: BigInt(0),
+          language: '',
+        },
+      ],
+    });
   }
 
   get tts(): TTS {
@@ -885,14 +965,14 @@ export class VoicePipelineAgent extends (EventEmitter as new () => TypedEmitter<
     speechId: string,
     source: string | LLMStream | AsyncIterable<string>,
   ): SynthesisHandle {
+    // Create synchronizer without the publishing events
     const synchronizer = new TextAudioSynchronizer(defaultTextSyncOptions);
+    
+    // We only update the internal transcribed text but don't publish it
+    // since that will be handled by the beforeTTSCallback if using publishUpfrontTTSCallback
     synchronizer.on('textUpdated', (text) => {
       this.#agentTranscribedText = text.text;
-      this.#room!.localParticipant!.publishTranscription({
-        participantIdentity: this.#room!.localParticipant!.identity,
-        trackSid: this.#agentPublication!.sid!,
-        segments: [text],
-      });
+      // Transcription publishing removed from here - it's now in the publishUpfrontTTSCallback
     });
 
     if (!this.#agentOutput) {
